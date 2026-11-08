@@ -44,8 +44,10 @@ STARTUP_S = 5.0
 STDERR_LIMIT = 64 * 1024
 
 STAGES = {
-    1: {"hands": 400, "time_bank_ms": 60_000, "wallclock_s": 180, "cap": 400},
-    2: {"hands": 1000, "time_bank_ms": 150_000, "wallclock_s": 450, "cap": 1000},
+    1: {"hands": 400, "time_bank_ms": 60_000, "wallclock_s": 180, "cap": 400,
+        "leg_hands": 200, "leg_bank_ms": 30_000, "leg_wallclock_s": 90},
+    2: {"hands": 1000, "time_bank_ms": 150_000, "wallclock_s": 450, "cap": 1000,
+        "leg_hands": 500, "leg_bank_ms": 75_000, "leg_wallclock_s": 225},
 }
 
 HAND_NAMES = ("high card", "one pair", "two pair", "three of a kind", "straight",
@@ -450,11 +452,12 @@ class Hand:
 class Match:
     def __init__(self, args):
         stage = STAGES[args.stage]
-        self.hands = args.hands or stage["hands"]
+        self.leg = args.leg
+        self.hands = args.hands or (stage["leg_hands"] if self.leg else stage["hands"])
         if self.hands <= 0 or self.hands % 2:
             sys.exit("--hands must be a positive even number (every deal is played twice)")
         self.cap = stage["cap"]
-        self.time_bank_ms = stage["time_bank_ms"]
+        self.time_bank_ms = stage["leg_bank_ms"] if self.leg else stage["time_bank_ms"]
         self.seed = args.seed if args.seed is not None else str(random.SystemRandom().randrange(10 ** 9))
         self.verbose = args.verbose
         self.log_dir = args.log_dir
@@ -471,7 +474,7 @@ class Match:
             bot_a.proc.kill()
             raise
         self.bots = (bot_a, bot_b)
-        wall = math.inf if args.no_time_limits else stage["wallclock_s"]
+        wall = math.inf if args.no_time_limits else stage["leg_wallclock_s" if self.leg else "wallclock_s"]
         self.wall_deadline = time.monotonic() + wall
 
     def write(self, text):
@@ -510,10 +513,14 @@ class Match:
         totals, played, forfeits = [0, 0], 0, []
         try:
             for hand_id in range(1, self.hands + 1):
-                deal = (hand_id - 1) // 2  # hands 2k+1 and 2k+2 share a deal
+                # Rulebook 7.1: each leg holds every deal once, and leg 2 swaps cards and seats.
+                # Without --leg, hands 2k+1 and 2k+2 share a deal in one process (pre-update format).
+                deal = hand_id - 1 if self.leg else (hand_id - 1) // 2
                 deck = [r + s for r in RANKS for s in SUITS]
                 random.Random(f"{self.seed}:{deal}").shuffle(deck)
                 button = (hand_id - 1) % 2  # seats alternate; cards stay with the seat
+                if self.leg == 2:
+                    button = 1 - button
                 hand = Hand(self, hand_id, button, (deck[0:3], deck[3:6]), deck[6:11])
                 seat_nets = hand.play()
                 totals[button] += seat_nets[0]
@@ -578,6 +585,8 @@ def main():
     p.add_argument("--stage", type=int, choices=(1, 2), default=1,
                    help="match length and limits to use (default: 1)")
     p.add_argument("--hands", type=int, help="number of hands, even (default: 400 in stage 1, 1000 in stage 2)")
+    p.add_argument("--leg", type=int, choices=(1, 2), help="play one leg of a match under the updated rules: "
+                   "200 or 500 hands, per-leg bank; the same --seed in legs 1 and 2 gives a duplicate match")
     p.add_argument("--seed", help="deal seed; the same seed gives the same deals (default: random)")
     p.add_argument("--log-dir", default="logs", help="folder for match.log and stderr files ('' to disable)")
     p.add_argument("--python", default=sys.executable, help="interpreter used to run the bots (default: this one)")

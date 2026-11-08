@@ -219,3 +219,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# CFR training work files and binary
+tools/cfr/work*/
+tools/cfr/mccfr
